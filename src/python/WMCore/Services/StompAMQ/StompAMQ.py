@@ -9,6 +9,7 @@ import json
 import logging
 import time
 import uuid
+import socket
 
 import stomp
 
@@ -32,8 +33,8 @@ class StompyListener(object):
     def on_heartbeat(self):
         self.logr.info('on_heartbeat')
 
-    def on_send(self, frame):
-        self.logr.info('on_send HEADERS: %s, BODY: %s ...', str(frame.headers), str(frame.body)[:160])
+    def on_send(self, headers, body):
+        self.logr.info('on_send HEADERS: %s, BODY: %s ...', str(headers), str(body)[:160])
 
     def on_connected(self, headers, body):
         self.logr.info('on_connected %s %s', str(headers), str(body))
@@ -89,11 +90,12 @@ class StompAMQ(object):
         :return: a list of successfully sent notification bodies
         """
 
-        conn = stomp.Connection(host_and_ports=self._host_and_ports)
+        conn = stomp.Connection(host_and_ports=self._host_and_ports,
+                                user=self._username, passcode=self._password)
         conn.set_listener('StompyListener', StompyListener())
         try:
             conn.start()
-            conn.connect(username=self._username, passcode=self._password, wait=True)
+            conn.connect(wait=True)
         except stomp.exception.ConnectFailedException as exc:
             self._logger.error("Connection to %s failed %s", repr(self._host_and_ports), str(exc))
             return []
@@ -125,16 +127,13 @@ class StompAMQ(object):
         """
         try:
             body = notification.pop('body')
-            destination = notification.pop('topic')
-            conn.send(destination=destination,
-                      headers=notification,
-                      body=json.dumps(body),
-                      ack='auto')
-            self._logger.debug('Notification %s sent', str(notification))
+            conn.send(headers=notification,
+                      message=json.dumps(body))
+            self._logger.debug('Notification %s sent', str(body.get("metadata").get("id")))
             return body
         except Exception as exc:
             self._logger.error('Notification: %s not send, error: %s',
-                          str(notification), str(exc))
+                          str(body.get("metadata").get("id")), str(exc))
             return None
 
 
@@ -152,7 +151,7 @@ class StompAMQ(object):
         producer = producer or self._producer
 
         notification = {}
-        notification['topic'] = self._topic
+        notification['destination'] = self._topic
 
         # Add headers
         headers = {
